@@ -5010,24 +5010,11 @@ pub enum Data {
 }
 
 pub async fn confirm_insecure_connection(
-    interface: &impl Interface,
-    receiver: &mut UnboundedReceiver<Data>,
+    _interface: &impl Interface,
+    _receiver: &mut UnboundedReceiver<Data>,
 ) -> bool {
-    interface.msgbox(
-        "insecure-connection-nocancel-hasclose",
-        "Insecure Connection",
-        "conn-e2ee-unavailable-tip",
-        "",
-    );
-    while let Some(data) = receiver.recv().await {
-        match data {
-            Data::ContinueInsecureConnection => return true,
-            Data::RejectInsecureConnection => return false,
-            Data::Close => return false,
-            _ => {}
-        }
-    }
-    false
+    // ONYX: 始终直接放行，不弹出"非安全连接 无法验证端到端加密"提示框
+    true
 }
 
 /// Keycode for key events.

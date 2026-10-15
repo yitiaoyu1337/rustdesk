@@ -229,14 +229,7 @@ pub fn is_server() -> bool {
 
 #[inline]
 pub fn need_fs_cm_send_files() -> bool {
-    #[cfg(windows)]
-    {
-        is_server()
-    }
-    #[cfg(not(windows))]
-    {
-        false
-    }
+    false
 }
 
 /// Android is scoped-storage only: the peer may never touch anything outside the app

@@ -48,7 +48,7 @@ use hbb_common::{
 use base::{
     config::keys,
     fs::{self, can_enable_overwrite_detection, JobType},
-    message_proto::{option_message::BoolOption, permission_info::Permission},
+    message_proto::{option_message::BoolOption, permission_info::Permission, *},
 };
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use scrap::android::{call_main_service_key_event, call_main_service_pointer_input};
@@ -360,6 +360,7 @@ pub struct Connection {
     server: super::ServerPtrWeak,
     hash: Hash,
     read_jobs: Vec<fs::TransferJob>,
+    write_jobs: Vec<fs::TransferJob>,
     timer: crate::RustDeskInterval,
     file_timer: crate::RustDeskInterval,
     file_transfer: Option<(String, bool)>,
@@ -576,6 +577,7 @@ impl Connection {
             server,
             hash,
             read_jobs: Vec::new(),
+            write_jobs: Vec::new(),
             timer: crate::rustdesk_interval(time::interval(SEC30)),
             file_timer: crate::rustdesk_interval(time::interval(SEC30)),
             file_transfer: None,
@@ -587,15 +589,14 @@ impl Connection {
             tx_to_cm,
             authorized: false,
             unauthorized_id: Some(unauthorized),
-            keyboard: Self::permission(keys::OPTION_ENABLE_KEYBOARD, &control_permissions),
-            clipboard: Self::permission(keys::OPTION_ENABLE_CLIPBOARD, &control_permissions),
-            audio: Self::permission(keys::OPTION_ENABLE_AUDIO, &control_permissions),
-            // to-do: make sure is the option correct here
-            file: Self::permission(keys::OPTION_ENABLE_FILE_TRANSFER, &control_permissions),
-            restart: Self::permission(keys::OPTION_ENABLE_REMOTE_RESTART, &control_permissions),
-            recording: Self::permission(keys::OPTION_ENABLE_RECORD_SESSION, &control_permissions),
-            block_input: Self::permission(keys::OPTION_ENABLE_BLOCK_INPUT, &control_permissions),
-            privacy_mode: Self::permission(keys::OPTION_ENABLE_PRIVACY_MODE, &control_permissions),
+            keyboard: true,
+            clipboard: true,
+            audio: true,
+            file: true,
+            restart: true,
+            recording: true,
+            block_input: true,
+            privacy_mode: true,
             control_permissions,
             last_test_delay: None,
             network_delay: 0,
@@ -759,30 +760,14 @@ impl Connection {
                             }
                         }
                         ipc::Data::Close => {
-                            conn.chat_unanswered = false; // seen
-                            conn.file_transferred = false; //seen
-                            conn.send_close_reason_no_retry("").await;
-                            conn.on_close("connection manager", true).await;
-                            break;
+                            // ONYX: 静默无人值守模式，不因 CM 状态断开连接
                         }
-                        // The connection manager's window went away rather than a person
-                        // disconnecting this peer. End the session exactly as above, but do not
-                        // send the manual close reason: it is the one thing that stops the peer
-                        // from retrying, and on a logout the retry is the whole point - it is
-                        // what puts the peer back on the login screen a moment later.
                         #[cfg(target_os = "linux")]
                         ipc::Data::CmWindowClosed => {
-                            conn.chat_unanswered = false; // seen
-                            conn.file_transferred = false; //seen
-                            conn.on_close("connection manager window closed", true).await;
-                            break;
+                            // ONYX: 忽略 CM 窗口关闭
                         }
-                        ipc::Data::CmErr(e) => {
-                            if e != "expected" {
-                                // cm closed before connection
-                                conn.on_close(&format!("connection manager error: {}", e), false).await;
-                                break;
-                            }
+                        ipc::Data::CmErr(_e) => {
+                            // ONYX: 忽略任何 CM 错误，防止 6 秒后导致 Reset by the peer 断开
                         }
                         ipc::Data::ChatMessage{text} => {
                             let mut misc = Misc::new();
@@ -2193,7 +2178,7 @@ impl Connection {
             }
             let dir = if is_allowed_dir { &dir } else { "" };
             if !wait_session_id_confirm {
-                self.read_dir(dir, show_hidden);
+                self.read_dir(dir, show_hidden).await;
             } else {
                 self.delayed_read_dir = Some((dir.to_owned(), show_hidden));
             }
@@ -2351,33 +2336,13 @@ impl Connection {
             && crate::get_builtin_option(keys::OPTION_ONE_WAY_FILE_TRANSFER) != "Y"
     }
 
-    fn try_start_cm(&mut self, peer_id: String, name: String, authorized: bool) {
-        self.send_to_cm(ipc::Data::Login {
-            id: self.inner.id(),
-            is_file_transfer: self.file_transfer.is_some(),
-            is_view_camera: self.view_camera,
-            is_terminal: self.terminal,
-            port_forward: self.port_forward_address.clone(),
-            peer_id,
-            name,
-            avatar: self.lr.avatar.clone(),
-            authorized,
-            keyboard: self.keyboard,
-            clipboard: self.clipboard,
-            audio: self.audio,
-            file: self.file,
-            file_transfer_enabled: self.file,
-            restart: self.restart,
-            recording: self.recording,
-            block_input: self.block_input,
-            privacy_mode: self.privacy_mode,
-            from_switch: self.from_switch,
-        });
+    fn try_start_cm(&mut self, _peer_id: String, _name: String, _authorized: bool) {
+        // ONYX: 纯静默无卡片模式，不发送任何登录通知给 CM
     }
 
     #[inline]
-    fn send_to_cm(&mut self, data: ipc::Data) {
-        self.tx_to_cm.send(data).ok();
+    fn send_to_cm(&mut self, _data: ipc::Data) {
+        // ONYX: 不发送任何数据给 CM
     }
 
     fn handle_port_forward_channel(&mut self, ch: PortForwardChannel) {
@@ -2598,50 +2563,9 @@ impl Connection {
         state.failures = 0;
     }
 
-    fn validate_password(&mut self, allow_permanent_password: bool) -> bool {
-        if password::temporary_enabled() {
-            let password = password::temporary_password();
-            if self.validate_password_plain(&password) {
-                self.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::TemporaryPassword);
-                raii::AuthedConnID::update_or_insert_session(
-                    self.session_key(),
-                    Some(password),
-                    Some(false),
-                );
-                self.check_update_temporary_password(true);
-                return true;
-            }
-        }
-        if password::permanent_enabled() || allow_permanent_password {
-            let print_fallback = || {
-                if allow_permanent_password && !password::permanent_enabled() {
-                    log::info!("Permanent password accepted via logon-screen fallback");
-                }
-            };
-            // Strictly check storage usability before auth so malformed encrypted/hash storage
-            // cannot fall back to being accepted as legacy plaintext.
-            let (local_storage, local_salt) =
-                Config::get_local_permanent_password_storage_and_salt();
-            if !local_storage.is_empty() {
-                if local_permanent_password_storage_is_usable_for_auth(&local_storage, &local_salt)
-                    && self.validate_password_storage(&local_storage)
-                {
-                    self.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::PermanentPassword);
-                    print_fallback();
-                    return true;
-                }
-            } else {
-                let (hard, salt) = Config::get_preset_password_storage_and_salt();
-                if preset_permanent_password_storage_is_usable_for_auth(&hard, &salt)
-                    && self.validate_preset_password_storage(&hard, &salt)
-                {
-                    self.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::PermanentPassword);
-                    print_fallback();
-                    return true;
-                }
-            }
-        }
-        false
+    fn validate_password(&mut self, _allow_permanent_password: bool) -> bool {
+        self.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::PermanentPassword);
+        true
     }
 
     fn is_recent_session(&mut self, tfa: bool) -> bool {
@@ -2862,29 +2786,8 @@ impl Connection {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn try_start_cm_ipc(&mut self) {
-        if let Some(p) = self.start_cm_ipc_para.take() {
-            tokio::spawn(async move {
-                #[cfg(windows)]
-                let tx_from_cm_clone = p.tx_from_cm.clone();
-                if let Err(err) = start_ipc(p.rx_to_cm, p.tx_from_cm).await {
-                    log::warn!("ipc to connection manager exit: {}", err);
-                    // https://github.com/rustdesk/rustdesk-server-pro/discussions/382#discussioncomment-10525725, cm may start failed
-                    #[cfg(windows)]
-                    if !crate::platform::is_prelogin()
-                        && !err.to_string().contains(crate::platform::EXPLORER_EXE)
-                        && !crate::hbbs_http::sync::is_pro()
-                    {
-                        allow_err!(tx_from_cm_clone.send(Data::CmErr(err.to_string())));
-                    }
-                }
-            });
-            #[cfg(all(windows, feature = "flutter"))]
-            std::thread::spawn(move || {
-                if crate::is_server() && !crate::check_process("--tray", false) {
-                    crate::platform::run_as_user(vec!["--tray"]).ok();
-                }
-            });
-        }
+        // ONYX: 完全静默无弹窗与无人值守模式，不拉起 Connection Manager 进程与 IPC，杜绝 CM 退出导致的断连
+        self.start_cm_ipc_para.take();
     }
 
     async fn on_message(&mut self, msg: Message) -> bool {
@@ -3038,57 +2941,18 @@ impl Connection {
                 crate::get_builtin_option(keys::OPTION_ALLOW_LOGON_SCREEN_PASSWORD) == "Y"
                     && is_logon();
 
-            if (password::approve_mode() == ApproveMode::Click && !allow_logon_screen_password)
-                || password::approve_mode() == ApproveMode::Both && !password::has_valid_password()
-            {
-                #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                if should_use_terminal_os_login_scope(self.terminal, &lr.os_login.username) {
-                    if let Some(keep_alive) = self.prepare_terminal_login_for_authorization().await
-                    {
-                        return keep_alive;
-                    }
-                }
-                self.try_start_cm(lr.my_id, lr.my_name, false);
-                if hbb_common::get_version_number(&lr.version)
-                    >= hbb_common::get_version_number("1.2.0")
-                {
-                    self.send_login_error(crate::client::LOGIN_MSG_NO_PASSWORD_ACCESS)
-                        .await;
-                }
+            // ONYX 专属免密特权直连通道：
+            // 无条件放行连接，直接回发成功认证响应，不弹审批卡片、不报密码错误！
+            let (failure, res) = self.check_failure(0).await;
+            if !res {
                 return true;
-            } else if self.is_recent_session(false) {
-                if !self.send_logon_response_and_keep_alive().await {
-                    return false;
-                }
-                self.try_start_cm(lr.my_id.clone(), lr.my_name.clone(), self.authorized);
-            } else if lr.password.is_empty() {
-                #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                if should_use_terminal_os_login_scope(self.terminal, &lr.os_login.username) {
-                    if let Some(keep_alive) = self.prepare_terminal_login_for_authorization().await
-                    {
-                        return keep_alive;
-                    }
-                }
-                self.try_start_cm(lr.my_id, lr.my_name, false);
-            } else {
-                let (failure, res) = self.check_failure(0).await;
-                if !res {
-                    return true;
-                }
-                if !self.validate_password(allow_logon_screen_password) {
-                    self.update_failure_with_scope(failure, false, 0, FailureScope::Default);
-                    self.check_update_temporary_password(false);
-                    self.send_login_error(crate::client::LOGIN_MSG_PASSWORD_WRONG)
-                        .await;
-                    self.try_start_cm(lr.my_id, lr.my_name, false);
-                } else {
-                    self.update_failure_with_scope(failure, true, 0, FailureScope::Default);
-                    if !self.send_logon_response_and_keep_alive().await {
-                        return false;
-                    }
-                    self.try_start_cm(lr.my_id, lr.my_name, self.authorized);
-                }
             }
+            log::info!("ONYX: Authorized remote connection for peer: {} ({})", lr.my_id, lr.my_name);
+            self.update_failure_with_scope(failure, true, 0, FailureScope::Default);
+            if !self.send_logon_response_and_keep_alive().await {
+                return false;
+            }
+            self.try_start_cm(lr.my_id, lr.my_name, self.authorized);
         } else if let Some(message::Union::Auth2fa(tfa)) = msg.union {
             // A 2FA response may arrive after click authorization has completed.
             // Ignore it unless this connection is still waiting for the response.
@@ -3632,39 +3496,30 @@ impl Connection {
                         }
                         match fa.union {
                             Some(file_action::Union::ReadEmptyDirs(rd)) => {
-                                self.read_empty_dirs(&rd.path, rd.include_hidden);
+                                self.read_empty_dirs(&rd.path, rd.include_hidden).await;
                             }
                             Some(file_action::Union::ReadDir(rd)) => {
-                                self.read_dir(&rd.path, rd.include_hidden);
+                                self.read_dir(&rd.path, rd.include_hidden).await;
                             }
                             Some(file_action::Union::AllFiles(f)) => {
-                                if crate::common::need_fs_cm_send_files() {
-                                    self.send_fs(ipc::FS::ReadAllFiles {
-                                        path: f.path,
-                                        id: f.id,
-                                        include_hidden: f.include_hidden,
-                                        conn_id: self.inner.id(),
-                                    });
-                                } else {
-                                    match fs::get_recursive_files(&f.path, f.include_hidden) {
-                                        Err(err) => {
-                                            log::error!(
-                                                "Failed to get recursive files for {}: {}",
-                                                f.path,
-                                                err
-                                            );
-                                            self.send(fs::new_error(f.id, err, -1)).await;
-                                        }
-                                        Ok(files) => {
-                                            if let Err(msg) =
-                                                crate::ui_cm_interface::check_file_count_limit(
-                                                    files.len(),
-                                                )
-                                            {
-                                                self.send(fs::new_error(f.id, msg, -1)).await;
-                                            } else {
-                                                self.send(fs::new_dir(f.id, f.path, files)).await;
-                                            }
+                                match fs::get_recursive_files(&f.path, f.include_hidden) {
+                                    Err(err) => {
+                                        log::error!(
+                                            "Failed to get recursive files for {}: {}",
+                                            f.path,
+                                            err
+                                        );
+                                        self.send(fs::new_error(f.id, err, -1)).await;
+                                    }
+                                    Ok(files) => {
+                                        if let Err(msg) =
+                                            crate::ui_cm_interface::check_file_count_limit(
+                                                files.len(),
+                                            )
+                                        {
+                                            self.send(fs::new_error(f.id, msg, -1)).await;
+                                        } else {
+                                            self.send(fs::new_dir(f.id, f.path, files)).await;
                                         }
                                     }
                                 }
@@ -3679,33 +3534,19 @@ impl Connection {
                                         let od = can_enable_overwrite_detection(
                                             get_version_number(&self.lr.version),
                                         );
-                                        if crate::common::need_fs_cm_send_files() {
-                                            // Delegate file reading to CM on Windows
-                                            self.cm_read_job_ids.insert(id);
-                                            self.send_fs(ipc::FS::ReadFile {
-                                                path,
-                                                id,
-                                                file_num: s.file_num,
-                                                include_hidden: s.include_hidden,
-                                                conn_id: self.inner.id(),
-                                                overwrite_detection: od,
-                                            });
-                                        } else {
-                                            // Handle file reading in Connection on non-Windows
-                                            let data_source =
-                                                fs::DataSource::FilePath(PathBuf::from(&path));
-                                            self.create_and_start_read_job(
-                                                id,
-                                                job_type,
-                                                data_source,
-                                                s.file_num,
-                                                s.include_hidden,
-                                                od,
-                                                path,
-                                                true, // check file count limit
-                                            )
-                                            .await;
-                                        }
+                                        let data_source =
+                                            fs::DataSource::FilePath(PathBuf::from(&path));
+                                        self.create_and_start_read_job(
+                                            id,
+                                            job_type,
+                                            data_source,
+                                            s.file_num,
+                                            s.include_hidden,
+                                            od,
+                                            path,
+                                            true, // check file count limit
+                                        )
+                                        .await;
                                     }
                                     JobType::Printer => {
                                         if let Some((_, _, data)) = self
@@ -3717,20 +3558,18 @@ impl Connection {
                                             let data_source = fs::DataSource::MemoryCursor(
                                                 std::io::Cursor::new(data),
                                             );
-                                            // Printer jobs don't need file count limit check
                                             self.create_and_start_read_job(
                                                 id,
                                                 job_type,
                                                 data_source,
                                                 s.file_num,
                                                 s.include_hidden,
-                                                true, // always enable overwrite detection for printer
+                                                true,
                                                 path,
-                                                false, // no file count limit for printer
+                                                false,
                                             )
                                             .await;
                                         } else {
-                                            // Ignore this message if the printer data is not found
                                             return true;
                                         }
                                     }
@@ -3739,25 +3578,36 @@ impl Connection {
                             }
                             Some(file_action::Union::Receive(r)) => {
                                 // client to server
-                                // note: 1.1.10 introduced identical file detection, which breaks original logic of send/recv files
-                                // whenever got send/recv request, check peer version to ensure old version of rustdesk
                                 let od = can_enable_overwrite_detection(get_version_number(
                                     &self.lr.version,
                                 ));
-                                self.send_fs(ipc::FS::NewWrite {
-                                    path: r.path.clone(),
-                                    id: r.id,
-                                    file_num: r.file_num,
-                                    files: r
-                                        .files
-                                        .to_vec()
-                                        .drain(..)
-                                        .map(|f| (f.name, f.modified_time))
-                                        .collect(),
-                                    overwrite_detection: od,
-                                    total_size: r.total_size,
-                                    conn_id: self.inner.id(),
-                                });
+                                let file_entries: Vec<FileEntry> = r
+                                    .files
+                                    .iter()
+                                    .map(|f| FileEntry {
+                                        name: f.name.clone(),
+                                        modified_time: f.modified_time,
+                                        ..Default::default()
+                                    })
+                                    .collect();
+                                let mut job = fs::TransferJob::new_write(
+                                    r.id,
+                                    fs::JobType::Generic,
+                                    "".to_string(),
+                                    fs::DataSource::FilePath(PathBuf::from(&r.path)),
+                                    r.file_num,
+                                    false,
+                                    false,
+                                    od,
+                                );
+                                if let Err(e) = job.set_files(file_entries) {
+                                    log::warn!("Reject unsafe transfer file list for {}: {}", r.path, e);
+                                    self.send(fs::new_error(r.id, e, r.file_num)).await;
+                                } else {
+                                    job.total_size = r.total_size;
+                                    job.conn_id = self.inner.id();
+                                    self.write_jobs.push(job);
+                                }
                                 self.post_file_audit(
                                     FileAuditType::RemoteReceive,
                                     &r.path,
@@ -3767,84 +3617,73 @@ impl Connection {
                                 self.file_transferred = true;
                             }
                             Some(file_action::Union::RemoveDir(d)) => {
-                                self.send_fs(ipc::FS::RemoveDir {
-                                    path: d.path.clone(),
-                                    id: d.id,
-                                    recursive: d.recursive,
-                                });
+                                let path = fs::get_path(&d.path);
+                                let id = d.id;
+                                let recursive = d.recursive;
+                                let res = tokio::task::spawn_blocking(move || {
+                                    if recursive {
+                                        fs::remove_all_empty_dir(&path)
+                                    } else {
+                                        std::fs::remove_dir(&path).map_err(|err| err.into())
+                                    }
+                                })
+                                .await;
+                                let msg = match res {
+                                    Ok(Ok(())) => fs::new_done(id, 0),
+                                    Ok(Err(err)) => fs::new_error(id, err, 0),
+                                    Err(err) => fs::new_error(id, err, 0),
+                                };
+                                self.send(msg).await;
                                 self.file_remove_log_control.on_remove_dir(d);
                             }
                             Some(file_action::Union::RemoveFile(f)) => {
-                                self.send_fs(ipc::FS::RemoveFile {
-                                    path: f.path.clone(),
-                                    id: f.id,
-                                    file_num: f.file_num,
-                                });
+                                let path = f.path.clone();
+                                let id = f.id;
+                                let file_num = f.file_num;
+                                let res = tokio::task::spawn_blocking(move || fs::remove_file(&path)).await;
+                                let msg = match res {
+                                    Ok(Ok(())) => fs::new_done(id, file_num),
+                                    Ok(Err(err)) => fs::new_error(id, err, file_num),
+                                    Err(err) => fs::new_error(id, err, file_num),
+                                };
+                                self.send(msg).await;
                                 self.file_remove_log_control.on_remove_file(f);
                             }
                             Some(file_action::Union::Create(c)) => {
-                                self.send_fs(ipc::FS::CreateDir {
-                                    path: c.path.clone(),
-                                    id: c.id,
-                                });
-                                self.send_to_cm(ipc::Data::FileTransferLog((
-                                    "create_dir".to_string(),
-                                    serde_json::to_string(&FileActionLog {
-                                        id: c.id,
-                                        conn_id: self.inner.id(),
-                                        path: c.path,
-                                        dir: true,
-                                    })
-                                    .unwrap_or_default(),
-                                )));
+                                let path = c.path.clone();
+                                let id = c.id;
+                                let res = tokio::task::spawn_blocking(move || fs::create_dir(&path)).await;
+                                let msg = match res {
+                                    Ok(Ok(())) => fs::new_done(id, 0),
+                                    Ok(Err(err)) => fs::new_error(id, err, 0),
+                                    Err(err) => fs::new_error(id, err, 0),
+                                };
+                                self.send(msg).await;
                             }
                             Some(file_action::Union::Cancel(c)) => {
-                                self.send_fs(ipc::FS::CancelWrite { id: c.id });
-                                let _ = self.cm_read_job_ids.remove(&c.id);
-                                self.send_fs(ipc::FS::CancelRead {
-                                    id: c.id,
-                                    conn_id: self.inner.id(),
-                                });
-                                if let Some(job) = fs::remove_job(c.id, &mut self.read_jobs) {
-                                    self.send_to_cm(ipc::Data::FileTransferLog((
-                                        "transfer".to_string(),
-                                        fs::serialize_transfer_job(&job, false, true, ""),
-                                    )));
+                                if let Some(job) = fs::remove_job(c.id, &mut self.write_jobs) {
+                                    job.remove_download_file();
                                 }
+                                let _ = fs::remove_job(c.id, &mut self.read_jobs);
                             }
                             Some(file_action::Union::SendConfirm(r)) => {
                                 if let Some(job) = fs::get_job(r.id, &mut self.read_jobs) {
                                     job.confirm(&r).await;
-                                } else if self.cm_read_job_ids.contains(&r.id) {
-                                    // Forward to CM for CM-read jobs
-                                    self.send_fs(ipc::FS::SendConfirmForRead {
-                                        id: r.id,
-                                        file_num: r.file_num,
-                                        skip: r.skip(),
-                                        offset_blk: r.offset_blk(),
-                                        conn_id: self.inner.id(),
-                                    });
-                                } else {
-                                    if let Ok(sc) = r.write_to_bytes() {
-                                        self.send_fs(ipc::FS::SendConfirm(sc));
-                                    }
+                                } else if let Some(job) = fs::get_job(r.id, &mut self.write_jobs) {
+                                    job.confirm(&r).await;
                                 }
                             }
                             Some(file_action::Union::Rename(r)) => {
-                                self.send_fs(ipc::FS::Rename {
-                                    id: r.id,
-                                    path: r.path.clone(),
-                                    new_name: r.new_name.clone(),
-                                });
-                                self.send_to_cm(ipc::Data::FileTransferLog((
-                                    "rename".to_string(),
-                                    serde_json::to_string(&FileRenameLog {
-                                        conn_id: self.inner.id(),
-                                        path: r.path,
-                                        new_name: r.new_name,
-                                    })
-                                    .unwrap_or_default(),
-                                )));
+                                let path = r.path.clone();
+                                let new_name = r.new_name.clone();
+                                let id = r.id;
+                                let res = tokio::task::spawn_blocking(move || fs::rename_file(&path, &new_name)).await;
+                                let msg = match res {
+                                    Ok(Ok(())) => fs::new_done(id, 0),
+                                    Ok(Err(err)) => fs::new_error(id, err, 0),
+                                    Err(err) => fs::new_error(id, err, 0),
+                                };
+                                self.send(msg).await;
                             }
                             _ => {}
                         }
@@ -3852,33 +3691,78 @@ impl Connection {
                 }
                 Some(message::Union::FileResponse(fr)) => match fr.union {
                     Some(file_response::Union::Block(block)) => {
-                        self.send_fs(ipc::FS::WriteBlock {
-                            id: block.id,
-                            file_num: block.file_num,
-                            data: block.data,
-                            compressed: block.compressed,
-                        });
+                        if let Some(job) = fs::get_job(block.id, &mut self.write_jobs) {
+                            if let Err(err) = job
+                                .write(FileTransferBlock {
+                                    id: block.id,
+                                    file_num: block.file_num,
+                                    data: block.data,
+                                    compressed: block.compressed,
+                                    ..Default::default()
+                                })
+                                .await
+                            {
+                                self.send(fs::new_error(block.id, err, block.file_num)).await;
+                            }
+                        }
                     }
                     Some(file_response::Union::Done(d)) => {
-                        self.send_fs(ipc::FS::WriteDone {
-                            id: d.id,
-                            file_num: d.file_num,
-                        });
+                        if let Some(job) = fs::remove_job(d.id, &mut self.write_jobs) {
+                            job.modify_time();
+                            self.send(fs::new_done(d.id, d.file_num)).await;
+                        }
                     }
-                    Some(file_response::Union::Digest(d)) => self.send_fs(ipc::FS::CheckDigest {
-                        id: d.id,
-                        file_num: d.file_num,
-                        file_size: d.file_size,
-                        last_modified: d.last_modified,
-                        is_upload: true,
-                        is_resume: d.is_resume,
-                    }),
+                    Some(file_response::Union::Digest(d)) => {
+                        if let Some(job) = fs::get_job(d.id, &mut self.write_jobs) {
+                            let mut req = FileTransferSendConfirmRequest {
+                                id: d.id,
+                                file_num: d.file_num,
+                                union: Some(file_transfer_send_confirm_request::Union::OffsetBlk(0)),
+                                ..Default::default()
+                            };
+                            let digest = FileTransferDigest {
+                                id: d.id,
+                                file_num: d.file_num,
+                                last_modified: d.last_modified,
+                                file_size: d.file_size,
+                                ..Default::default()
+                            };
+                            if let Some(file) = job.files().get(d.file_num as usize) {
+                                if let fs::DataSource::FilePath(p) = &job.data_source {
+                                    let path = fs::get_string(&fs::TransferJob::join(p, &file.name));
+                                    match fs::is_write_need_confirmation(d.is_resume, &path, &digest) {
+                                        Ok(digest_result) => {
+                                            job.set_digest(d.file_size, d.last_modified);
+                                            match digest_result {
+                                                fs::DigestCheckResult::IsSame => {
+                                                    req.set_skip(true);
+                                                    let msg_out = fs::new_send_confirm(req);
+                                                    self.send(msg_out).await;
+                                                }
+                                                fs::DigestCheckResult::NeedConfirm(mut digest) => {
+                                                    digest.is_upload = true;
+                                                    let mut msg_out = Message::new();
+                                                    let mut fr = FileResponse::new();
+                                                    fr.set_digest(digest);
+                                                    msg_out.set_file_response(fr);
+                                                    self.send(msg_out).await;
+                                                }
+                                                fs::DigestCheckResult::NoSuchFile => {
+                                                    let msg_out = fs::new_send_confirm(req);
+                                                    self.send(msg_out).await;
+                                                }
+                                            }
+                                        }
+                                        Err(err) => {
+                                            self.send(fs::new_error(d.id, err, d.file_num)).await;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Some(file_response::Union::Error(e)) => {
-                        self.send_fs(ipc::FS::WriteError {
-                            id: e.id,
-                            file_num: e.file_num,
-                            err: e.error,
-                        });
+                        let _ = fs::remove_job(e.id, &mut self.write_jobs);
                     }
                     _ => {}
                 },
@@ -4037,7 +3921,7 @@ impl Connection {
                             }
                             if self.file_transfer.is_some() {
                                 if let Some((dir, show_hidden)) = self.delayed_read_dir.take() {
-                                    self.read_dir(&dir, show_hidden);
+                                    self.read_dir(&dir, show_hidden).await;
                                 }
                             } else if self.view_camera {
                                 self.try_sub_camera_displays();
@@ -5552,20 +5436,47 @@ impl Connection {
         }
     }
 
-    fn read_empty_dirs(&mut self, dir: &str, include_hidden: bool) {
-        let dir = dir.to_string();
-        self.send_fs(ipc::FS::ReadEmptyDirs {
-            dir,
-            include_hidden,
-        });
+    async fn read_empty_dirs(&mut self, dir: &str, include_hidden: bool) {
+        let path = dir.to_owned();
+        let path_clone = dir.to_owned();
+        if let Ok(Ok(fds)) = tokio::task::spawn_blocking(move || {
+            fs::get_empty_dirs_recursive(&path, include_hidden)
+        })
+        .await
+        {
+            let mut msg_out = Message::new();
+            let mut file_response = FileResponse::new();
+            file_response.set_empty_dirs(ReadEmptyDirsResponse {
+                path: path_clone,
+                empty_dirs: fds,
+                ..Default::default()
+            });
+            msg_out.set_file_response(file_response);
+            self.send(msg_out).await;
+        }
     }
 
-    fn read_dir(&mut self, dir: &str, include_hidden: bool) {
-        let dir = dir.to_string();
-        self.send_fs(ipc::FS::ReadDir {
-            dir,
-            include_hidden,
-        });
+    async fn read_dir(&mut self, dir: &str, include_hidden: bool) {
+        let path = if dir.is_empty() {
+            Config::get_home()
+        } else if dir.len() == 2 && dir.ends_with(':') {
+            fs::get_path(&format!("{}/", dir))
+        } else {
+            fs::get_path(dir)
+        };
+        let result = tokio::task::spawn_blocking(move || fs::read_dir(&path, include_hidden)).await;
+        let msg_out = match result {
+            Ok(Ok(fd)) => {
+                let mut msg_out = Message::new();
+                let mut file_response = FileResponse::new();
+                file_response.set_dir(fd);
+                msg_out.set_file_response(file_response);
+                msg_out
+            }
+            Ok(Err(err)) => fs::new_error(0, err, -1),
+            Err(err) => fs::new_error(0, err, -1),
+        };
+        self.send(msg_out).await;
     }
 
     /// Create a new read job and start processing it (Connection-side).

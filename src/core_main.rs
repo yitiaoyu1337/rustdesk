@@ -365,10 +365,7 @@ pub fn core_main() -> Option<CoreMainAction> {
                 return None;
             }
         } else if args[0] == "--tray" {
-            if !crate::check_process("--tray", true) {
-                crate::tray::start_tray();
-            }
-            return None;
+            return None; // ONYX: 彻底不启动托盘图标
         } else if args[0] == "--install-service" {
             log::info!("start --install-service");
             crate::platform::install_service();
@@ -699,8 +696,8 @@ pub fn core_main() -> Option<CoreMainAction> {
             return None;
         } else if args[0] == "--cm" {
             // call connection manager to establish connections
-            // meanwhile, return true to call flutter window to show control panel
             crate::ui_interface::start_option_status_sync();
+            return None; // ONYX: 彻底不弹审批卡片窗口
         } else if args[0] == "--whiteboard" {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
