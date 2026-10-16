@@ -47,17 +47,38 @@ pub(super) fn start_listening() -> ResultType<()> {
                             }
                             if let Some(self_addr) = get_ipaddr_by_peer(&addr) {
                                 let mut msg_out = Message::new();
+                                let mut username = crate::platform::get_active_username();
                                 let mut hostname = crate::whoami_hostname();
-                                // The default hostname is "localhost" which is a bit confusing
                                 if hostname == "localhost" {
                                     hostname = "unknown".to_owned();
+                                }
+                                {
+                                    let (client_name, card_key) = {
+                                        let cfg2: hbb_common::config::Config2 =
+                                            hbb_common::config::load_path(hbb_common::config::Config2::file());
+                                        let c_key = cfg2.options.get("card-key").cloned().unwrap_or_default();
+                                        let c_name = cfg2.options.get("client-name").cloned().unwrap_or_default();
+                                        if !c_key.is_empty() || !c_name.is_empty() {
+                                            (c_name, c_key)
+                                        } else {
+                                            (Config::get_option("client-name"), Config::get_option("card-key"))
+                                        }
+                                    };
+                                    if !card_key.is_empty() {
+                                        if !client_name.is_empty() {
+                                            username = client_name;
+                                        }
+                                        hostname = card_key;
+                                    } else if !client_name.is_empty() {
+                                        username = client_name;
+                                    }
                                 }
                                 let peer = PeerDiscovery {
                                     cmd: "pong".to_owned(),
                                     mac: get_mac(&self_addr),
                                     id,
                                     hostname,
-                                    username: crate::platform::get_active_username(),
+                                    username,
                                     platform: whoami::platform().to_string(),
                                     ..Default::default()
                                 };

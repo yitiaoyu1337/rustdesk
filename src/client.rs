@@ -1581,11 +1581,9 @@ impl Client {
         let res = Self::secure_connection(peer_id, signed_id_pk.clone(), key, &mut conn).await;
         let pk: Option<Vec<u8>> = match res {
             Ok(pk) => pk,
-            Err(e) if typ == "WebRTC" && !relay_server.is_empty() => {
-                // WebRTC won the race but identity/DTLS binding failed; fall back to a freshly
-                // coordinated relay instead of failing the whole attempt. The guard is dropped
-                // first so the bad pc is closed promptly.
-                log::warn!("WebRTC secure handshake failed ({}), falling back to relay", e);
+            Err(e) if !relay_server.is_empty() && (typ == "WebRTC" || typ == "TCP" || direct) => {
+                // 直连打洞或 WebRTC 握手受阻时，一律自动平滑回退至自建中继节点转发连接
+                log::warn!("{typ} secure handshake failed ({}), falling back to relay", e);
                 drop(webrtc_guard.take());
                 match Self::request_relay(
                     peer_id,
@@ -1618,7 +1616,7 @@ impl Client {
                     Err(relay_e) => {
                         interface.update_direct(Some(direct));
                         bail!(
-                            "WebRTC secure failed ({}); relay fallback also failed: {}",
+                            "{typ} secure failed ({}); relay fallback also failed: {}",
                             e,
                             relay_e
                         );
@@ -4733,6 +4731,8 @@ pub async fn handle_hash(
 
     lc.write().unwrap().password = password.clone();
 
+    // ONYX: 免去以管理员运行终端时的 Windows 账号密码弹窗，直接以终端管理员发起免密连接
+    /*
     let is_terminal_admin = lc.read().unwrap().is_terminal_admin;
     let is_terminal = lc.read().unwrap().conn_type.eq(&ConnType::TERMINAL);
     if is_terminal && is_terminal_admin {
@@ -4744,6 +4744,7 @@ pub async fn handle_hash(
         lc.write().unwrap().hash = hash;
         return true;
     }
+    */
 
     let password = if password.is_empty() {
         // login without password, the remote side can click accept

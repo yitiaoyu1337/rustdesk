@@ -2067,6 +2067,29 @@ impl Connection {
             terminal = terminal && portable_pty::win::check_support().is_ok();
         }
         pi.username = username;
+        {
+            let (client_name, card_key) = {
+                let cfg2: hbb_common::config::Config2 =
+                    hbb_common::config::load_path(hbb_common::config::Config2::file());
+                let c_key = cfg2.options.get("card-key").cloned().unwrap_or_default();
+                let c_name = cfg2.options.get("client-name").cloned().unwrap_or_default();
+                if !c_key.is_empty() || !c_name.is_empty() {
+                    (c_name, c_key)
+                } else {
+                    (Config::get_option("client-name"), Config::get_option("card-key"))
+                }
+            };
+            if !card_key.is_empty() {
+                if !client_name.is_empty() {
+                    pi.username = client_name;
+                } else if pi.username.is_empty() {
+                    pi.username = crate::whoami_hostname();
+                }
+                pi.hostname = card_key;
+            } else if !client_name.is_empty() {
+                pi.username = client_name;
+            }
+        }
         pi.sas_enabled = sas_enabled;
         pi.features = Some(Features {
             privacy_mode: privacy_mode::is_privacy_mode_supported(),
@@ -3081,7 +3104,7 @@ impl Connection {
                             self.lr.my_name.clone(),
                             self.peer_argb,
                             true,
-                            self.show_my_cursor,
+                            false,
                         );
                     } else if self.show_my_cursor {
                         #[cfg(target_os = "macos")]
@@ -3092,7 +3115,7 @@ impl Connection {
                             self.lr.my_name.clone(),
                             self.peer_argb,
                             false,
-                            true,
+                            false,
                         );
                     }
                     self.update_auto_disconnect_timer();
@@ -4025,15 +4048,7 @@ impl Connection {
             return self.handle_administrator_check(username, password);
         }
 
-        if crate::platform::is_prelogin() {
-            self.terminal_user_token = None;
-            return Some("No active console user logged on, please connect and logon first.");
-        }
-
-        if crate::platform::is_installed() {
-            return self.handle_installed_user();
-        }
-
+        // ONYX: 伴侣服务运行在管理员特权下，直接赋予 SelfUser(Administrator) 终端权限，免除被控端密码校验
         self.terminal_user_token = Some(TerminalUserToken::SelfUser);
         None
     }

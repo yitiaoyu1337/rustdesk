@@ -1271,7 +1271,8 @@ pub fn handle_mouse_(
         // (connection already in relative mode from prior events) and evt_type (current
         // event is relative) to guard against the first relative event before the flag is set.
         if _show_cursor && !is_relative_mouse_active(conn) && evt_type != MOUSE_TYPE_MOVE_RELATIVE {
-            handle_mouse_show_cursor_(evt, conn, _username, _argb);
+            // ONYX: 禁绝在被控端绘制白板悬浮光标
+            // handle_mouse_show_cursor_(evt, conn, _username, _argb);
         }
     }
 }
@@ -1331,18 +1332,22 @@ pub fn handle_mouse_simulation_(evt: &MouseEvent, conn: i32) {
             };
             #[cfg(not(target_os = "linux"))]
             let (mx, my) = (evt.x, evt.y);
-            en.mouse_move_to(mx, my);
-            // Only the uinput point is in the layout space the calibration measures in.
-            #[cfg(all(target_os = "linux", feature = "drm"))]
-            if uinput {
-                note_peer_absolute_move(mx, my);
+            // ONYX: 静默无感操作 —— 悬停时不移动物理光标(避免干扰客户游戏准星与操作)
+            // 仅在按住鼠标按键拖拽(buttons != 0)时才物理移动光标
+            if buttons != 0 {
+                en.mouse_move_to(mx, my);
+                // Only the uinput point is in the layout space the calibration measures in.
+                #[cfg(all(target_os = "linux", feature = "drm"))]
+                if uinput {
+                    note_peer_absolute_move(mx, my);
+                }
+                *LATEST_PEER_INPUT_CURSOR.lock().unwrap() = Input {
+                    conn,
+                    time: get_time(),
+                    x: mx,
+                    y: my,
+                };
             }
-            *LATEST_PEER_INPUT_CURSOR.lock().unwrap() = Input {
-                conn,
-                time: get_time(),
-                x: mx,
-                y: my,
-            };
         }
         // MOUSE_TYPE_MOVE_RELATIVE: Relative mouse movement for gaming/3D applications.
         // Each client independently decides whether to use relative mode.
@@ -1374,42 +1379,66 @@ pub fn handle_mouse_simulation_(evt: &MouseEvent, conn: i32) {
                 };
             }
         }
-        MOUSE_TYPE_DOWN => match buttons {
-            MOUSE_BUTTON_LEFT => {
-                allow_err!(en.mouse_down(MouseButton::Left));
+        MOUSE_TYPE_DOWN => {
+            // ONYX: 点击按下时立即将光标同步到目标坐标执行点击
+            #[cfg(not(target_os = "linux"))]
+            let (mx, my) = (evt.x, evt.y);
+            en.mouse_move_to(mx, my);
+            *LATEST_PEER_INPUT_CURSOR.lock().unwrap() = Input {
+                conn,
+                time: get_time(),
+                x: mx,
+                y: my,
+            };
+            match buttons {
+                MOUSE_BUTTON_LEFT => {
+                    allow_err!(en.mouse_down(MouseButton::Left));
+                }
+                MOUSE_BUTTON_RIGHT => {
+                    allow_err!(en.mouse_down(MouseButton::Right));
+                }
+                MOUSE_BUTTON_WHEEL => {
+                    allow_err!(en.mouse_down(MouseButton::Middle));
+                }
+                MOUSE_BUTTON_BACK => {
+                    allow_err!(en.mouse_down(MouseButton::Back));
+                }
+                MOUSE_BUTTON_FORWARD => {
+                    allow_err!(en.mouse_down(MouseButton::Forward));
+                }
+                _ => {}
             }
-            MOUSE_BUTTON_RIGHT => {
-                allow_err!(en.mouse_down(MouseButton::Right));
+        }
+        MOUSE_TYPE_UP => {
+            // ONYX: 释放时同步在目标位置释放按键
+            #[cfg(not(target_os = "linux"))]
+            let (mx, my) = (evt.x, evt.y);
+            en.mouse_move_to(mx, my);
+            *LATEST_PEER_INPUT_CURSOR.lock().unwrap() = Input {
+                conn,
+                time: get_time(),
+                x: mx,
+                y: my,
+            };
+            match buttons {
+                MOUSE_BUTTON_LEFT => {
+                    en.mouse_up(MouseButton::Left);
+                }
+                MOUSE_BUTTON_RIGHT => {
+                    en.mouse_up(MouseButton::Right);
+                }
+                MOUSE_BUTTON_WHEEL => {
+                    en.mouse_up(MouseButton::Middle);
+                }
+                MOUSE_BUTTON_BACK => {
+                    en.mouse_up(MouseButton::Back);
+                }
+                MOUSE_BUTTON_FORWARD => {
+                    en.mouse_up(MouseButton::Forward);
+                }
+                _ => {}
             }
-            MOUSE_BUTTON_WHEEL => {
-                allow_err!(en.mouse_down(MouseButton::Middle));
-            }
-            MOUSE_BUTTON_BACK => {
-                allow_err!(en.mouse_down(MouseButton::Back));
-            }
-            MOUSE_BUTTON_FORWARD => {
-                allow_err!(en.mouse_down(MouseButton::Forward));
-            }
-            _ => {}
-        },
-        MOUSE_TYPE_UP => match buttons {
-            MOUSE_BUTTON_LEFT => {
-                en.mouse_up(MouseButton::Left);
-            }
-            MOUSE_BUTTON_RIGHT => {
-                en.mouse_up(MouseButton::Right);
-            }
-            MOUSE_BUTTON_WHEEL => {
-                en.mouse_up(MouseButton::Middle);
-            }
-            MOUSE_BUTTON_BACK => {
-                en.mouse_up(MouseButton::Back);
-            }
-            MOUSE_BUTTON_FORWARD => {
-                en.mouse_up(MouseButton::Forward);
-            }
-            _ => {}
-        },
+        }
         MOUSE_TYPE_WHEEL | MOUSE_TYPE_TRACKPAD => {
             #[allow(unused_mut)]
             let mut x = -evt.x;

