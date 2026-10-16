@@ -17,6 +17,12 @@ cert.pfx
 *png
 *svg
 *jpg
+!flutter/assets/icon.png
+!flutter/assets/icon.ico
+!flutter/assets/icon.svg
+!flutter/windows/runner/resources/app_icon.ico
+!res/logo.svg
+!res/logo-header.svg
 sciter.dll
 **pdb
 src/bridge_generated.rs
