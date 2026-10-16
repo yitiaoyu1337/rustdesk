@@ -52,6 +52,23 @@ pub fn core_main() -> Option<CoreMainAction> {
         // return None to terminate the process
         return None;
     }
+    #[cfg(windows)]
+    if !crate::platform::is_elevated(None).unwrap_or(false) {
+        let raw_args: Vec<String> = std::env::args().skip(1).collect();
+        let is_info_query = raw_args.iter().any(|a| a == "--version" || a == "--build-date");
+        if !is_info_query {
+            if let Ok(cur_exe) = std::env::current_exe() {
+                let arg_str = raw_args
+                    .iter()
+                    .map(|a| if a.contains(' ') { format!("\"{}\"", a) } else { a.clone() })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if let Ok(true) = crate::platform::run_uac(&cur_exe.to_string_lossy(), &arg_str) {
+                    return None;
+                }
+            }
+        }
+    }
     let mut args = Vec::new();
     let mut flutter_args = Vec::new();
     let mut i = 0;

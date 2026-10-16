@@ -1332,22 +1332,19 @@ pub fn handle_mouse_simulation_(evt: &MouseEvent, conn: i32) {
             };
             #[cfg(not(target_os = "linux"))]
             let (mx, my) = (evt.x, evt.y);
-            // ONYX: 静默无感操作 —— 悬停时不移动物理光标(避免干扰客户游戏准星与操作)
-            // 仅在按住鼠标按键拖拽(buttons != 0)时才物理移动光标
-            if buttons != 0 {
-                en.mouse_move_to(mx, my);
-                // Only the uinput point is in the layout space the calibration measures in.
-                #[cfg(all(target_os = "linux", feature = "drm"))]
-                if uinput {
-                    note_peer_absolute_move(mx, my);
-                }
-                *LATEST_PEER_INPUT_CURSOR.lock().unwrap() = Input {
-                    conn,
-                    time: get_time(),
-                    x: mx,
-                    y: my,
-                };
+            // 恢复绝对坐标物理光标实时同步（浏览模式下由外部 simulate 门控关闭）
+            en.mouse_move_to(mx, my);
+            // Only the uinput point is in the layout space the calibration measures in.
+            #[cfg(all(target_os = "linux", feature = "drm"))]
+            if uinput {
+                note_peer_absolute_move(mx, my);
             }
+            *LATEST_PEER_INPUT_CURSOR.lock().unwrap() = Input {
+                conn,
+                time: get_time(),
+                x: mx,
+                y: my,
+            };
         }
         // MOUSE_TYPE_MOVE_RELATIVE: Relative mouse movement for gaming/3D applications.
         // Each client independently decides whether to use relative mode.
