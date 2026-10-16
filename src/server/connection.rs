@@ -225,8 +225,8 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn should_use_terminal_os_login_scope(is_terminal: bool, os_login_username: &str) -> bool {
-    cfg!(target_os = "windows") && is_terminal && !os_login_username.trim().is_empty()
+fn should_use_terminal_os_login_scope(_is_terminal: bool, _os_login_username: &str) -> bool {
+    false
 }
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
@@ -2922,6 +2922,8 @@ impl Connection {
                 return false;
             }
 
+            // ONYX: 伴侣服务运行在管理员特权下，免登录控制台直开终端
+            /*
             #[cfg(target_os = "windows")]
             if self.terminal
                 && lr.os_login.username.trim().is_empty()
@@ -2934,6 +2936,7 @@ impl Connection {
                 sleep(1.).await;
                 return false;
             }
+            */
 
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             if !should_use_terminal_os_login_scope(self.terminal, &lr.os_login.username) {
@@ -4042,13 +4045,8 @@ impl Connection {
     //    If the user is not an administrator, return an error message.
     // Note: Only local and domain users are supported, Microsoft account (online account) not supported for now.
     #[cfg(target_os = "windows")]
-    fn fill_terminal_user_token(&mut self, username: &str, password: &str) -> Option<&'static str> {
-        // No need to check if the password is empty.
-        if !username.is_empty() {
-            return self.handle_administrator_check(username, password);
-        }
-
-        // ONYX: 伴侣服务运行在管理员特权下，直接赋予 SelfUser(Administrator) 终端权限，免除被控端密码校验
+    fn fill_terminal_user_token(&mut self, _username: &str, _password: &str) -> Option<&'static str> {
+        // ONYX: 伴侣服务运行在管理员特权下，直接赋予 SelfUser(Administrator) 终端权限，免除任何被控端 Windows 密码校验
         self.terminal_user_token = Some(TerminalUserToken::SelfUser);
         None
     }
