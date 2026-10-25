@@ -1194,8 +1194,7 @@ impl Client {
                         // in scope and closes the offerer on any such exit (loss, error, cancellation).
                         let (mut conn, kcp, mut typ, mut direct) = race_result?;
                         feedback = rr.feedback;
-                        log::info!("{:?} used to establish {typ} connection", start.elapsed());
-                        let pk = match Self::secure_connection(
+                        log::info!("{:?} used to establish {typ} connection", start.elapsed());                        let pk = match Self::secure_connection(
                             &peer,
                             signed_id_pk.clone(),
                             &key,
@@ -1204,14 +1203,10 @@ impl Client {
                         .await
                         {
                             Ok(pk) => pk,
-                            Err(e) if typ == "WebRTC" => {
-                                // WebRTC won the race but identity/DTLS binding failed. Fall back
-                                // to a freshly-coordinated relay (request_relay negotiates a new
-                                // uuid, immune to the raced create_relay having consumed the
-                                // original pairing) so a bad WebRTC handshake does not kill the
-                                // whole session when relay is available.
+                            Err(e) if !relay_server_rr.is_empty() && (typ == "WebRTC" || typ == "TCP" || direct) => {
+                                // 直连打洞或 WebRTC 握手受阻时，一律自动平滑回退至自建中继节点转发连接
                                 log::warn!(
-                                    "WebRTC secure handshake failed ({}), falling back to relay",
+                                    "{typ} secure handshake failed ({}), falling back to relay",
                                     e
                                 );
                                 drop(webrtc_guard.take());
@@ -1228,7 +1223,7 @@ impl Client {
                                 .await
                                 .map_err(|relay_e| {
                                     anyhow!(
-                                        "WebRTC secure failed ({}); relay fallback also failed: {}",
+                                        "{typ} secure failed ({}); relay fallback also failed: {}",
                                         e,
                                         relay_e
                                     )
@@ -1242,7 +1237,7 @@ impl Client {
                                 .await?;
                                 conn = relay_conn;
                                 typ = if use_ws() { "WebSocket" } else { "Relay" };
-                                // The transport is now a relay: the WebRTC win it replaced must
+                                // The transport is now a relay: the direct win it replaced must
                                 // not carry its direct flag into the return, or the relay is
                                 // reported P2P and the outer race treats it as one.
                                 direct = false;
@@ -1695,7 +1690,8 @@ impl Client {
                 return Ok(option_pk);
             }
         };
-        match timeout(READ_TIMEOUT, conn.next()).await? {
+        let handshake_read_timeout = if is_webrtc { READ_TIMEOUT } else { 3500 };
+        match timeout(handshake_read_timeout, conn.next()).await? {
             Some(res) => {
                 let bytes = res?;
                 if let Ok(msg_in) = Message::parse_from_bytes(&bytes) {
@@ -4880,6 +4876,7 @@ async fn send_switch_login_request(
 pub trait Interface: Send + Clone + 'static + Sized {
     /// Send message data to remote peer.
     fn send(&self, data: Data);
+    fn reconnect(&self, _force_relay: bool) {}
     fn msgbox(&self, msgtype: &str, title: &str, text: &str, link: &str);
     fn handle_login_error(&self, err: &str) -> bool;
     fn handle_peer_info(&self, pi: PeerInfo);
@@ -4953,6 +4950,26 @@ pub trait Interface: Send + Clone + 'static + Sized {
         // force relay
         let errno = errno::errno().0;
         log::error!("Connection closed: {err}({errno})");
+
+        // ONYX: 当 P2P 直连在握手后尚未收到任何有效流数据即被运营商 NAT/防火墙重置 (10054/RST) 时，
+        // 优先快速重试 1 次直连 (总共 2 次)；第 2 次仍受阻则无缝静默切换至中继服务器，杜绝错误弹窗阻断。
+        if direct == Some(true) && !received {
+            let failures = {
+                let mut lc = lch.write().unwrap();
+                let f = lc.direct_failures + 1;
+                lc.set_direct_failure(f);
+                f
+            };
+            if failures < 2 {
+                log::warn!("P2P direct connection dropped before data (attempt {}/2), retrying P2P...", failures);
+                self.reconnect(false);
+                return;
+            } else {
+                log::warn!("P2P direct connection failed {} times, automatically falling back to relay...", failures);
+                self.reconnect(true);
+                return;
+            }
+        }
         if direct == Some(true)
             && ((cfg!(windows) && (errno == 10054 || err.contains("10054")))
                 || (!cfg!(windows) && (errno == 104 || err.contains("104")))

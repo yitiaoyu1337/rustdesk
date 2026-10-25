@@ -1329,11 +1329,10 @@ impl<T: InvokeUiSession> Session<T> {
         if true == force_relay {
             let mut lc = self.lc.write().unwrap();
             lc.force_relay = true;
-            // An explicit retry-via-relay is a decision about this peer, not transport
-            // necessity: Relay-only ICE for this round like any force-always-relay session,
-            // and it is the one kind of relay that belongs in the peer's saved config.
             lc.policy_relay = true;
-            lc.peer_relay = true;
+            // ONYX: 本次重连走中继转发，但不持久化写入磁盘配置 (lc.peer_relay = false)
+            // 确保每次新建会话时，仍始终以 P2P 直连打洞优先，仅在打洞失败时动态平滑回退中继
+            lc.peer_relay = false;
         }
         self.lc.write().unwrap().peer_info = None;
         self.reconnect_count.fetch_add(1, Ordering::SeqCst);
@@ -1795,6 +1794,10 @@ impl<T: InvokeUiSession> FileManager for Session<T> {}
 
 #[async_trait]
 impl<T: InvokeUiSession> Interface for Session<T> {
+    fn reconnect(&self, force_relay: bool) {
+        Self::reconnect(self, force_relay);
+    }
+
     fn get_lch(&self) -> Arc<RwLock<LoginConfigHandler>> {
         return self.lc.clone();
     }
