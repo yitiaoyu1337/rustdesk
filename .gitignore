@@ -66,3 +66,12 @@ flutter/web/
 /third_party/libdrmtap/
 # Local git worktrees
 .worktrees/
+
+# ── ONYX 构建日志与临时备份（不入库）──
+*.log
+build_*.log
+*.bak[0-9]*
+src/*.bak*
+# ── ONYX 内部文档与服务器代码副本（含口令派生算法与服务器 IP，勿公开）──
+ONYX_IMPL_PLAN.md
+deploy/

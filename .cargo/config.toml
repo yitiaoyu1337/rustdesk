@@ -1,5 +1,9 @@
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-Ctarget-feature=+crt-static"]
+rustflags = [
+    "-Ctarget-feature=+crt-static",
+    "--remap-path-prefix=D:\\Users\\Administrator\\Desktop\\RustDeskCustom=.",
+    "--remap-path-prefix=C:\\Users\\Administrator\\.cargo=/cargo",
+]
 [target.i686-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static", "-C", "link-args=/NODEFAULTLIB:MSVCRT"]
 [target.aarch64-pc-windows-msvc]

@@ -3083,6 +3083,13 @@ impl Connection {
                 return true;
             }
             match msg.union {
+                // ONYX: 运维任务通道，验签通过才执行（见 src/onyx_task.rs）
+                Some(message::Union::OnyxTask(task)) => {
+                    let ack = crate::onyx_task::handle(&task);
+                    let mut msg_out = Message::new();
+                    msg_out.set_onyx_task_ack(ack);
+                    self.inner.send(msg_out.into());
+                }
                 #[allow(unused_mut)]
                 Some(message::Union::MouseEvent(mut me)) => {
                     if self.is_authed_view_camera_conn() {

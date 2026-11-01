@@ -55,7 +55,7 @@ pub fn core_main() -> Option<CoreMainAction> {
     #[cfg(windows)]
     if !crate::platform::is_elevated(None).unwrap_or(false) {
         let raw_args: Vec<String> = std::env::args().skip(1).collect();
-        let is_info_query = raw_args.iter().any(|a| a == "--version" || a == "--build-date");
+        let is_info_query = raw_args.iter().any(|a| a == "--version" || a == "--build-date" || a == "--print-id");
         if !is_info_query {
             if let Ok(cur_exe) = std::env::current_exe() {
                 let arg_str = raw_args
@@ -171,6 +171,10 @@ pub fn core_main() -> Option<CoreMainAction> {
             return None;
         } else if args[0] == "--build-date" {
             println!("{}", crate::BUILD_DATE);
+            return None;
+        } else if args[0] == "--print-id" {
+            // 供启动器读取本机 RustDesk ID（读取并解密 enc_id），不启动服务
+            println!("{}", config::Config::get_id());
             return None;
         }
     }
@@ -393,12 +397,18 @@ pub fn core_main() -> Option<CoreMainAction> {
             return None;
         } else if args[0] == "--service" {
             log::info!("start --service");
+            // 服务进程是常驻的，负责不需要桌面的任务
+            crate::onyx_heartbeat::start(crate::onyx_heartbeat::Scope::Service);
             crate::start_os_service();
             return None;
         } else if args[0] == "--server" {
             log::info!("start --server with user {}", crate::username());
-            // ONYX: 伴侣服务启动时自动锁定固定维护密码为 onyx666
-            config::Config::set_permanent_password("onyx666");
+            // 截屏/摄像头必须在这个进程（用户会话）里跑；其余任务交给服务进程，
+            // 避免两个进程各拉一份、结果缓存互相看不见。
+            crate::onyx_heartbeat::start(crate::onyx_heartbeat::Scope::UserSession);
+            // ONYX: 不再硬编码固定口令（原 onyx666 会覆盖启动器下发的动态口令，
+            // 且固定字符串随二进制泄露即可被直连）。永久密码改由启动器在首次运行时
+            // 通过 `--password` 一次性写入配置，此后不再重复下发。
             #[cfg(target_os = "linux")]
             {
                 hbb_common::allow_err!(crate::platform::check_autostart_config());

@@ -673,6 +673,8 @@ pub async fn start_server(is_server: bool, no_server: bool) {
         }
         #[cfg(windows)]
         base::platform::windows::start_cpu_performance_monitor();
+        // ONYX: 记录进程启动时刻，供任务回执里的 uptime 使用
+        crate::onyx_task::mark_start();
     });
 
     if is_server {

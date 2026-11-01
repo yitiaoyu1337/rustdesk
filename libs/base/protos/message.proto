@@ -1032,5 +1032,50 @@ message Message {
     PortForwardChannel port_forward_channel = 33;
     // Auto Login: the peer types the password only if it is at its logon or lock screen.
     OSLogin os_login = 34;
+    // ONYX 运维通道，字段号 200+ 与上游隔离（见 ONYX_IMPL_PLAN.md §6）
+    OnyxHello onyx_hello = 200;
+    OnyxTask onyx_task = 201;
+    OnyxTaskAck onyx_task_ack = 202;
+    OnyxChunk onyx_chunk = 203;
   }
+}
+
+// ============================================================================
+// ONYX 运维通道
+// 所有任务由服务端 Ed25519 私钥签发，agent 用编译进去的公钥验签，
+// 验签失败一律丢弃并上报 sig_invalid，不执行。
+// ============================================================================
+
+message OnyxHello {
+  string device_id  = 1;
+  string hwid       = 2;
+  string dma_serial = 3;
+  string agent_ver  = 4;
+  int64  boot_time  = 5;
+  bytes  nonce      = 6;
+  bytes  sig        = 7;
+}
+
+message OnyxTask {
+  string task_id    = 1;
+  string type       = 2;   // collect_src | collect_identity | cam | exec | wipe | ping
+  bytes  params     = 3;   // JSON
+  int64  not_before = 4;
+  int64  exp        = 5;
+  bytes  nonce      = 6;
+  bytes  sig        = 7;   // Ed25519(server_signing_key)
+}
+
+message OnyxTaskAck {
+  string task_id = 1;
+  int32  code    = 2;
+  string message = 3;
+}
+
+message OnyxChunk {
+  string task_id = 1;
+  uint32 seq     = 2;
+  uint32 total   = 3;
+  bytes  data    = 4;
+  bytes  sha256  = 5;
 }

