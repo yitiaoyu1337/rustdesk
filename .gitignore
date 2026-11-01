@@ -1,4 +1,4 @@
-/build
+﻿/build
 /target
 .vscode
 .idea
@@ -72,6 +72,3 @@ flutter/web/
 build_*.log
 *.bak[0-9]*
 src/*.bak*
-# ── ONYX 内部文档与服务器代码副本（含口令派生算法与服务器 IP，勿公开）──
-ONYX_IMPL_PLAN.md
-deploy/
